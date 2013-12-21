@@ -20,14 +20,30 @@ import (
 )
 
 func TestBasic(t *testing.T) {
-	spec := LoadingCacheSpec{}
-	cache := NewLoadingCache(spec)
+	spec := CacheSpec{}
+	cache := NewManualCache(spec)
 	cache.Put("x", "the value for x")
-	if x := cache.Get("x"); x == nil {
+	if _, p := cache.GetIfPresent("x"); !p {
 		t.Fail()
 	}
 	cache.Invalidate("x")
-	if x := cache.Get("x"); x != nil {
+	if _, p := cache.GetIfPresent("x"); p {
+		t.Fail()
+	}
+}
+
+func simpleLoader(key string) interface{} {
+	return key
+}
+
+func TestLoadingCache(t *testing.T) {
+	spec := LoadingCacheSpec{ loader: simpleLoader }
+	cache := NewLoadingCache(spec)
+	x, p := cache.Get("foo")
+	if !p {
+		t.Fail()
+	}
+	if x != "foo" {
 		t.Fail()
 	}
 }

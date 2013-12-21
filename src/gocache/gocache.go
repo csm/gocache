@@ -32,11 +32,6 @@ type Cache interface {
 	// Fetch the number of entries in the cache.
 	Size() uint
 
-	// Get a value from the cache, if present. If this cache is
-	// a loading cache, then the value loader function will be
-	// queried.
-	Get(key string) (interface{}, bool)
-
 	// Get a value from the cache, if present. If not present,
 	// query the supplied value loader for the value. If the
 	// value loader returns a value, it is placed into the cache
@@ -87,16 +82,27 @@ type CacheSpec struct {
 
 type ValueLoader func(key string) interface{}
 
+// A reason why a cache entry was removed.
 type RemovalReason int
+
 const (
+	// The entry was removed because it expired, either by
+	// write time, or read time.
 	Expired RemovalReason = iota
+
+	// The entry was explicitly removed with Invalidate.
 	Explicit
+
+	// The entry was overwritten with a new value.
 	Replaced
+
+	// The entry was removed because the cache was too large.
 	Size
 )
 
 type RemovalListener func(key string, value interface{}, reason RemovalReason)
 
+// A loading cache spec.
 type LoadingCacheSpec struct {
 	CacheSpec
 	loader ValueLoader
@@ -115,17 +121,30 @@ type shard struct {
 
 type baseCache struct {
 	Cache
+	spec CacheSpec
 	shards []shard
 }
 
 type ManualCache struct {
 	baseCache
-	spec CacheSpec
 }
 
 type LoadingCache struct {
 	baseCache
 	spec LoadingCacheSpec
+}
+
+func NewManualCache(spec CacheSpec) *ManualCache {
+	var result *ManualCache = new(ManualCache)
+	result.spec = spec
+	if spec.concurrencyLevel < 1 {
+		spec.concurrencyLevel = 1
+	}
+	result.shards = make([]shard, spec.concurrencyLevel)
+	for i := range result.shards {
+		result.shards[i] = shard { values: map[string]entry{}, lock: sync.RWMutex{} }
+	}
+	return result
 }
 
 func NewLoadingCache(spec LoadingCacheSpec) *LoadingCache {
@@ -141,7 +160,7 @@ func NewLoadingCache(spec LoadingCacheSpec) *LoadingCache {
 	return result
 }
 
-func (self *LoadingCache) Size() uint {
+func (self *baseCache) Size() uint {
 	var count uint = 0
 	for i := range self.shards {
 		count += uint(len(self.shards[i].values))
@@ -149,33 +168,50 @@ func (self *LoadingCache) Size() uint {
 	return count
 }
 
-func (self *LoadingCache) getShard(key string) shard {
+func (self *ManualCache) Size() uint {
+	return self.baseCache.Size()
+}
+
+func (self *LoadingCache) Size() uint {
+	return self.baseCache.Size()
+}
+
+func (self *baseCache) getShard(key string) shard {
 	return self.shards[hashcode(key) % uint32(len(self.shards))]
 }
 
-func (self *LoadingCache) Get(key string) interface{} {
+func (self *baseCache) GetIfPresent(key string) (interface{}, bool) {
 	s := self.getShard(key)
 	s.lock.RLock()
-	if entry, present := s.values[key]; present {
+	entry, present := s.values[key]
+	if present {
 		entry.getTime = time.Now()
-		s.lock.RUnlock()
-		self.Cleanup()
-		return entry.value
 	}
 	s.lock.RUnlock()
-	if self.spec.loader != nil {
-		value := self.spec.loader(key)
-		if value != nil {
-			s.lock.Lock()
-			s.values[key] = entry {value: value, putTime: time.Now(), getTime: time.Now()}
-			s.lock.Unlock()
-			return value
-		}
-	}
-	return nil
+	self.Cleanup()
+	return entry.value, present
 }
 
-func (self *LoadingCache) Put(key string, value interface{}) bool {
+func (self *baseCache) Get(key string, loader ValueLoader) (interface{}, bool) {
+	value, present := self.GetIfPresent(key)
+	if !present && loader != nil {
+		value = loader(key)
+		if value != nil {
+			s := self.getShard(key)
+			s.lock.Lock()
+			s.values[key] = entry{value: value, putTime: time.Now(), getTime: time.Now()}
+			s.lock.Unlock()
+			return value, true
+		}
+	}
+	return value, present
+}
+
+func (self *LoadingCache) Get(key string) (interface{}, bool) {
+	return self.baseCache.Get(key, self.spec.loader)
+}
+
+func (self *baseCache) Put(key string, value interface{}) bool {
 	var updated = false
 	if value != nil {
 		s := self.getShard(key)
@@ -193,7 +229,7 @@ func (self *LoadingCache) Put(key string, value interface{}) bool {
 	return updated
 }
 
-func (self *LoadingCache) Invalidate(key string) {
+func (self *baseCache) Invalidate(key string) {
 	s := self.getShard(key)
 	s.lock.Lock()
 	if x, p := s.values[key]; p {
@@ -206,7 +242,7 @@ func (self *LoadingCache) Invalidate(key string) {
 	self.Cleanup()
 }
 
-func (self *LoadingCache) Cleanup() {
+func (self *baseCache) Cleanup() {
 	// If we have a maximum size, check that the cache is within
 	// that size.
 	if self.spec.maxSize > 0 && self.Size() > self.spec.maxSize {
