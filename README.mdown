@@ -1,0 +1,5 @@
+Cache implementation in Go.
+
+Meant to be similar to cache implementations in the Guava package for Java.
+It will implement concurrent, manual and loading caches, with expire times,
+maximum sizes, concurrency levels.
