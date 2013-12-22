@@ -115,7 +115,7 @@ type entry struct {
 }
 
 type shard struct {
-	values map[string]entry
+	values map[string]*entry
 	lock sync.RWMutex
 }
 
@@ -123,6 +123,7 @@ type baseCache struct {
 	Cache
 	spec CacheSpec
 	shards []shard
+	removeShard uint
 }
 
 type ManualCache struct {
@@ -142,8 +143,9 @@ func NewManualCache(spec CacheSpec) *ManualCache {
 	}
 	result.shards = make([]shard, spec.concurrencyLevel)
 	for i := range result.shards {
-		result.shards[i] = shard { values: map[string]entry{}, lock: sync.RWMutex{} }
+		result.shards[i] = shard { values: map[string]*entry{}, lock: sync.RWMutex{} }
 	}
+	result.removeShard = 0
 	return result
 }
 
@@ -155,8 +157,9 @@ func NewLoadingCache(spec LoadingCacheSpec) *LoadingCache {
 	}
 	result.shards = make([]shard, spec.concurrencyLevel)
 	for i := range result.shards {
-		result.shards[i] = shard { values: map[string]entry{}, lock: sync.RWMutex{} }
+		result.shards[i] = shard { values: map[string]*entry{}, lock: sync.RWMutex{} }
 	}
+	result.removeShard = 0
 	return result
 }
 
@@ -168,14 +171,6 @@ func (self *baseCache) Size() uint {
 	return count
 }
 
-func (self *ManualCache) Size() uint {
-	return self.baseCache.Size()
-}
-
-func (self *LoadingCache) Size() uint {
-	return self.baseCache.Size()
-}
-
 func (self *baseCache) getShard(key string) shard {
 	return self.shards[hashcode(key) % uint32(len(self.shards))]
 }
@@ -183,13 +178,16 @@ func (self *baseCache) getShard(key string) shard {
 func (self *baseCache) GetIfPresent(key string) (interface{}, bool) {
 	s := self.getShard(key)
 	s.lock.RLock()
-	entry, present := s.values[key]
+	e, present := s.values[key]
 	if present {
-		entry.getTime = time.Now()
+		e.getTime = time.Now()
 	}
 	s.lock.RUnlock()
 	self.Cleanup()
-	return entry.value, present
+	if present {
+		return e.value, present
+	}
+	return nil, false
 }
 
 func (self *baseCache) Get(key string, loader ValueLoader) (interface{}, bool) {
@@ -199,7 +197,11 @@ func (self *baseCache) Get(key string, loader ValueLoader) (interface{}, bool) {
 		if value != nil {
 			s := self.getShard(key)
 			s.lock.Lock()
-			s.values[key] = entry{value: value, putTime: time.Now(), getTime: time.Now()}
+			e := new(entry)
+			e.value = value
+			e.putTime = time.Now()
+			e.getTime = time.Now()
+			s.values[key] = e
 			s.lock.Unlock()
 			return value, true
 		}
@@ -222,7 +224,11 @@ func (self *baseCache) Put(key string, value interface{}) bool {
 			}
 			updated = true
 		}
-		s.values[key] = entry{value: value, putTime: time.Now()}
+		e := new(entry)
+		e.value = value
+		e.putTime = time.Now()
+		e.getTime = time.Time{}
+		s.values[key] = e
 		s.lock.Unlock()
 	}
 	self.Cleanup()
@@ -247,27 +253,30 @@ func (self *baseCache) Cleanup() {
 	// that size.
 	if self.spec.maxSize > 0 && self.Size() > self.spec.maxSize {
 		toRemove := self.Size() - self.spec.maxSize
-		for i := toRemove; i >= 0; {
+		for i := toRemove; i > 0; {
 			var oldest time.Time = time.Now()
 			var key string = ""
-			var value interface{} = nil;
-			var shard = self.shards[i % uint(len(self.shards))]
-			shard.lock.Lock()
+			var value interface{} = nil
+			var shard = self.shards[self.removeShard]
+			self.removeShard = (self.removeShard + 1) % uint(len(self.shards))
+			shard.lock.RLock()
 			for k, v := range shard.values {
 				if v.getTime.Before(oldest) {
 					oldest = v.getTime
 					key = k
-					value = v
+					value = v.value
 				}
 			}
+			shard.lock.RUnlock()
 			if value != nil {
+				shard.lock.Lock()
 				delete(shard.values, key)
 				if self.spec.removalListener != nil {
 					self.spec.removalListener(key, value, Size)
 				}
 				i--
+				shard.lock.Unlock()
 			}
-			shard.lock.Unlock()
 		}
 	}
 	if self.spec.expireAfterAccess > 0 || self.spec.expireAfterWrite > 0 {
@@ -276,16 +285,17 @@ func (self *baseCache) Cleanup() {
 			shard.lock.RLock()
 			for key, value := range shard.values {
 				if self.spec.expireAfterWrite > 0 {
-					if value.putTime.Before(time.Now().Add(self.spec.expireAfterWrite)) {
+					if value.putTime.Add(self.spec.expireAfterWrite).Before(time.Now()) {
 						toRemove[key] = true
 					}
 				}
-				if self.spec.expireAfterAccess > 0 && value.getTime.Unix() > 0 {
-					if value.getTime.Before(time.Now().Add(self.spec.expireAfterAccess)) {
+				if self.spec.expireAfterAccess > 0 && !value.getTime.IsZero() {
+					if value.getTime.Add(self.spec.expireAfterAccess).Before(time.Now()) {
 						toRemove[key] = true
 					}
 				}
 			}
+			shard.lock.RUnlock()
 			shard.lock.Lock()
 			for key := range toRemove {
 				if x, p := shard.values[key]; p {
@@ -296,7 +306,6 @@ func (self *baseCache) Cleanup() {
 				}
 			}
 			shard.lock.Unlock()
-			shard.lock.RUnlock()
 		}
 	}
 }
