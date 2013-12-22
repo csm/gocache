@@ -183,7 +183,7 @@ func (self *baseCache) GetIfPresent(key string) (interface{}, bool) {
 		e.getTime = time.Now()
 	}
 	s.lock.RUnlock()
-	self.Cleanup()
+	go self.Cleanup()
 	if present {
 		return e.value, present
 	}
@@ -231,7 +231,7 @@ func (self *baseCache) Put(key string, value interface{}) bool {
 		s.values[key] = e
 		s.lock.Unlock()
 	}
-	self.Cleanup()
+	go self.Cleanup()
 	return updated
 }
 
@@ -245,7 +245,7 @@ func (self *baseCache) Invalidate(key string) {
 		delete(s.values, key)
 	}
 	s.lock.Unlock()
-	self.Cleanup()
+	go self.Cleanup()
 }
 
 func (self *baseCache) Cleanup() {

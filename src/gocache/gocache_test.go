@@ -109,3 +109,21 @@ func TestMaxSize(t *testing.T) {
 		t.Fail()
 	}
 }
+
+func TestMaxSize2(t *testing.T) {
+	spec := CacheSpec{maxSize:10,
+		concurrencyLevel: 8,
+		removalListener:func(k string, v interface{}, code RemovalReason) {
+			if code != Size {
+				t.Fail()
+			}
+		}}
+	cache := NewManualCache(spec)
+	for i := 0; i < 20; i++ {
+		cache.Put(fmt.Sprintf("key-%d", i), fmt.Sprintf("value-%d", i))
+	}
+	cache.Cleanup()
+	if cache.Size() > 10 {
+		t.Fail()
+	}
+}
