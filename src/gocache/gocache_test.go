@@ -28,27 +28,27 @@ func TestBasic(t *testing.T) {
 	if cache.Size() != 1 {
 		t.Fail()
 	}
-	if _, p, err := cache.GetIfPresent("x"); !p || err != nil {
+	if _, p := cache.GetIfPresent("x"); !p {
 		t.Fail()
 	}
 	cache.Invalidate("x")
 	if cache.Size() != 0 {
 		t.Fail()
 	}
-	if _, p, _ := cache.GetIfPresent("x"); p {
+	if _, p := cache.GetIfPresent("x"); p {
 		t.Fail()
 	}
 }
 
-func simpleLoader(key string) interface{} {
-	return key
+func simpleLoader(key string) (interface{}, error) {
+	return key, nil
 }
 
 func TestLoadingCache(t *testing.T) {
 	spec := LoadingCacheSpec{ loader: simpleLoader }
 	cache := NewLoadingCache(spec)
-	x, p := cache.Get("foo")
-	if !p {
+	x, p, err := cache.Get("foo")
+	if !p || err != nil {
 		t.Fail()
 	}
 	if x != "foo" {
@@ -67,7 +67,7 @@ func TestWriteExpiration(t *testing.T) {
 	cache.Put("foo", "bar")
 	time.Sleep(time.Second / 10)
 	cache.Cleanup()
-	if _, p, _ := cache.GetIfPresent("foo"); p {
+	if _, p := cache.GetIfPresent("foo"); p {
 		t.Fail()
 	}
 }
@@ -81,13 +81,13 @@ func TestAccessExpiration(t *testing.T) {
 		}}
 	cache := NewManualCache(spec)
 	cache.Put("foo", "bar")
-	if _, p, _ := cache.GetIfPresent("foo"); !p {
+	if _, p := cache.GetIfPresent("foo"); !p {
 		t.Log("accessing foo, should be there")
 		t.Fail()
 	}
 	time.Sleep(time.Second / 10)
 	cache.Cleanup()
-	if _, p, _ := cache.GetIfPresent("foo"); p {
+	if _, p := cache.GetIfPresent("foo"); p {
 		t.Log("accessing foo, should not be there")
 		t.Fail()
 	}
