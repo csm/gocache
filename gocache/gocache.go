@@ -213,7 +213,7 @@ func (self *baseCache) Get(key string, loader ValueLoader) (interface{}, bool, e
 	return value, present, nil
 }
 
-func (self *LoadingCache) Get(key string) (interface{}, bool) {
+func (self *LoadingCache) Get(key string) (interface{}, bool, error) {
 	return self.baseCache.Get(key, self.spec.loader)
 }
 
