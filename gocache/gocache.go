@@ -80,7 +80,7 @@ type CacheSpec struct {
 	removalListener RemovalListener
 }
 
-type ValueLoader func(key string) interface{}
+type ValueLoader func(key string) (interface{}, error)
 
 // A reason why a cache entry was removed.
 type RemovalReason int
@@ -190,10 +190,14 @@ func (self *baseCache) GetIfPresent(key string) (interface{}, bool) {
 	return nil, false
 }
 
-func (self *baseCache) Get(key string, loader ValueLoader) (interface{}, bool) {
+func (self *baseCache) Get(key string, loader ValueLoader) (interface{}, bool, error) {
 	value, present := self.GetIfPresent(key)
 	if !present && loader != nil {
-		value = loader(key)
+		var err error
+		value, err = loader(key)
+		if err != nil {
+			return nil, false, err
+		}
 		if value != nil {
 			s := self.getShard(key)
 			s.lock.Lock()
@@ -203,10 +207,10 @@ func (self *baseCache) Get(key string, loader ValueLoader) (interface{}, bool) {
 			e.getTime = time.Now()
 			s.values[key] = e
 			s.lock.Unlock()
-			return value, true
+			return value, true, nil
 		}
 	}
-	return value, present
+	return value, present, nil
 }
 
 func (self *LoadingCache) Get(key string) (interface{}, bool) {
