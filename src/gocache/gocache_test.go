@@ -45,7 +45,7 @@ func simpleLoader(key string) (interface{}, error) {
 }
 
 func TestLoadingCache(t *testing.T) {
-	spec := LoadingCacheSpec{ loader: simpleLoader }
+	spec := LoadingCacheSpec{ Loader: simpleLoader }
 	cache := NewLoadingCache(spec)
 	x, p, err := cache.Get("foo")
 	if !p || err != nil {
@@ -57,8 +57,8 @@ func TestLoadingCache(t *testing.T) {
 }
 
 func TestWriteExpiration(t *testing.T) {
-	spec := CacheSpec{expireAfterWrite:time.Second / 10,
-		removalListener:func(k string, v interface{}, code RemovalReason) {
+	spec := CacheSpec{ExpireAfterWrite:time.Second / 10,
+		RemovalListener:func(k string, v interface{}, code RemovalReason) {
 			if code != Expired {
 				t.Fail()
 			}
@@ -73,8 +73,8 @@ func TestWriteExpiration(t *testing.T) {
 }
 
 func TestAccessExpiration(t *testing.T) {
-	spec := CacheSpec{expireAfterAccess:time.Second / 10,
-		removalListener:func(k string, v interface{}, code RemovalReason) {
+	spec := CacheSpec{ExpireAfterAccess:time.Second / 10,
+		RemovalListener:func(k string, v interface{}, code RemovalReason) {
 			if code != Expired {
 				t.Fail()
 			}
@@ -94,8 +94,8 @@ func TestAccessExpiration(t *testing.T) {
 }
 
 func TestMaxSize(t *testing.T) {
-	spec := CacheSpec{maxSize:10,
-		removalListener:func(k string, v interface{}, code RemovalReason) {
+	spec := CacheSpec{MaxSize:10,
+		RemovalListener:func(k string, v interface{}, code RemovalReason) {
 			if code != Size {
 				t.Fail()
 			}
@@ -111,9 +111,9 @@ func TestMaxSize(t *testing.T) {
 }
 
 func TestMaxSize2(t *testing.T) {
-	spec := CacheSpec{maxSize:10,
-		concurrencyLevel: 8,
-		removalListener:func(k string, v interface{}, code RemovalReason) {
+	spec := CacheSpec{MaxSize:10,
+		ConcurrencyLevel: 8,
+		RemovalListener:func(k string, v interface{}, code RemovalReason) {
 			if code != Size {
 				t.Fail()
 			}

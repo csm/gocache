@@ -60,24 +60,24 @@ type Cache interface {
 // A base cache spec.
 type CacheSpec struct {
 	// The maximum size of the cache. If zero, the cache is unbounded.
-	maxSize uint
+	MaxSize uint
 
 	// A duration after which to expire entries when written to the
 	// cache. If zero, entries are not expired based on write time.
-	expireAfterWrite time.Duration
+	ExpireAfterWrite time.Duration
 
 	// A duration after which to expire entries when read from the
 	// cache. If zero, entries are not expired based on access time.
-	expireAfterAccess time.Duration
+	ExpireAfterAccess time.Duration
 
 	// The concurrency level. This will control the number of shards
 	// in the cache, which will affect how many concurrent threads
 	// can access the cache at once.
-	concurrencyLevel uint
+	ConcurrencyLevel uint
 
 	// A callback function that is called when entries are removed
 	// from the cache.
-	removalListener RemovalListener
+	RemovalListener RemovalListener
 }
 
 type ValueLoader func(key string) (interface{}, error)
@@ -105,7 +105,7 @@ type RemovalListener func(key string, value interface{}, reason RemovalReason)
 // A loading cache spec.
 type LoadingCacheSpec struct {
 	CacheSpec
-	loader ValueLoader
+	Loader ValueLoader
 }
 
 type entry struct {
@@ -138,10 +138,10 @@ type LoadingCache struct {
 func NewManualCache(spec CacheSpec) *ManualCache {
 	var result *ManualCache = new(ManualCache)
 	result.spec = spec
-	if spec.concurrencyLevel < 1 {
-		spec.concurrencyLevel = 1
+	if spec.ConcurrencyLevel < 1 {
+		spec.ConcurrencyLevel = 1
 	}
-	result.shards = make([]shard, spec.concurrencyLevel)
+	result.shards = make([]shard, spec.ConcurrencyLevel)
 	for i := range result.shards {
 		result.shards[i] = shard { values: map[string]*entry{}, lock: sync.RWMutex{} }
 	}
@@ -152,10 +152,10 @@ func NewManualCache(spec CacheSpec) *ManualCache {
 func NewLoadingCache(spec LoadingCacheSpec) *LoadingCache {
 	var result *LoadingCache = new(LoadingCache)
 	result.spec = spec
-	if spec.concurrencyLevel < 1 {
-		spec.concurrencyLevel = 1
+	if spec.ConcurrencyLevel < 1 {
+		spec.ConcurrencyLevel = 1
 	}
-	result.shards = make([]shard, spec.concurrencyLevel)
+	result.shards = make([]shard, spec.ConcurrencyLevel)
 	for i := range result.shards {
 		result.shards[i] = shard { values: map[string]*entry{}, lock: sync.RWMutex{} }
 	}
@@ -214,7 +214,7 @@ func (self *baseCache) Get(key string, loader ValueLoader) (interface{}, bool, e
 }
 
 func (self *LoadingCache) Get(key string) (interface{}, bool, error) {
-	return self.baseCache.Get(key, self.spec.loader)
+	return self.baseCache.Get(key, self.spec.Loader)
 }
 
 func (self *baseCache) Put(key string, value interface{}) bool {
@@ -223,8 +223,8 @@ func (self *baseCache) Put(key string, value interface{}) bool {
 		s := self.getShard(key)
 		s.lock.Lock()
 		if x, p := s.values[key]; p {
-			if self.spec.removalListener != nil {
-				self.spec.removalListener(key, x.value, Replaced)
+			if self.spec.RemovalListener != nil {
+				self.spec.RemovalListener(key, x.value, Replaced)
 			}
 			updated = true
 		}
@@ -243,8 +243,8 @@ func (self *baseCache) Invalidate(key string) {
 	s := self.getShard(key)
 	s.lock.Lock()
 	if x, p := s.values[key]; p {
-		if self.spec.removalListener != nil {
-			self.spec.removalListener(key, x.value, Explicit)
+		if self.spec.RemovalListener != nil {
+			self.spec.RemovalListener(key, x.value, Explicit)
 		}
 		delete(s.values, key)
 	}
@@ -255,8 +255,8 @@ func (self *baseCache) Invalidate(key string) {
 func (self *baseCache) Cleanup() {
 	// If we have a maximum size, check that the cache is within
 	// that size.
-	if self.spec.maxSize > 0 && self.Size() > self.spec.maxSize {
-		toRemove := self.Size() - self.spec.maxSize
+	if self.spec.MaxSize > 0 && self.Size() > self.spec.MaxSize {
+		toRemove := self.Size() - self.spec.MaxSize
 		for i := toRemove; i > 0; {
 			var oldest time.Time = time.Now()
 			var key string = ""
@@ -275,26 +275,26 @@ func (self *baseCache) Cleanup() {
 			if value != nil {
 				shard.lock.Lock()
 				delete(shard.values, key)
-				if self.spec.removalListener != nil {
-					self.spec.removalListener(key, value, Size)
+				if self.spec.RemovalListener != nil {
+					self.spec.RemovalListener(key, value, Size)
 				}
 				i--
 				shard.lock.Unlock()
 			}
 		}
 	}
-	if self.spec.expireAfterAccess > 0 || self.spec.expireAfterWrite > 0 {
+	if self.spec.ExpireAfterAccess > 0 || self.spec.ExpireAfterWrite > 0 {
 		for _, shard := range self.shards {
 			var toRemove = map[string]bool {}
 			shard.lock.RLock()
 			for key, value := range shard.values {
-				if self.spec.expireAfterWrite > 0 {
-					if value.putTime.Add(self.spec.expireAfterWrite).Before(time.Now()) {
+				if self.spec.ExpireAfterWrite > 0 {
+					if value.putTime.Add(self.spec.ExpireAfterWrite).Before(time.Now()) {
 						toRemove[key] = true
 					}
 				}
-				if self.spec.expireAfterAccess > 0 && !value.getTime.IsZero() {
-					if value.getTime.Add(self.spec.expireAfterAccess).Before(time.Now()) {
+				if self.spec.ExpireAfterAccess > 0 && !value.getTime.IsZero() {
+					if value.getTime.Add(self.spec.ExpireAfterAccess).Before(time.Now()) {
 						toRemove[key] = true
 					}
 				}
@@ -304,8 +304,8 @@ func (self *baseCache) Cleanup() {
 			for key := range toRemove {
 				if x, p := shard.values[key]; p {
 					delete(shard.values, key)
-					if self.spec.removalListener != nil {
-						self.spec.removalListener(key, x.value, Expired)
+					if self.spec.RemovalListener != nil {
+						self.spec.RemovalListener(key, x.value, Expired)
 					}
 				}
 			}
