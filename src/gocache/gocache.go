@@ -251,17 +251,19 @@ func (self *baseCache) Put(key string, value interface{}) bool {
 // condition until the prefetching routine completes.
 func (self *baseCache) Prefetch(key string, loader ValueLoader) {
 	if loader != nil {
-		wg := sync.WaitGroup{}
-		wg.Add(1)
-		self.prefetches[key] = wg
-		go func() {
-			value, err := loader(key)
-			if value != nil && err == nil {
-				self.Put(key, value)
-				wg.Done()
-				delete(self.prefetches, key)
-			}
-		}()
+		if _, p := self.prefetches[key]; !p {
+			wg := sync.WaitGroup{}
+			wg.Add(1)
+			self.prefetches[key] = wg
+			go func() {
+				value, err := loader(key)
+				if value != nil && err == nil {
+					self.Put(key, value)
+					wg.Done()
+					delete(self.prefetches, key)
+				}
+			}()
+		}
 	}
 }
 
