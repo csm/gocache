@@ -190,8 +190,8 @@ func (self *baseCache) GetIfPresent(key string) (interface{}, bool) {
 	if present {
 		return e.value, present
 	}
-	if self.prefetches[key] != nil {
-		self.prefetches[key].Wait()
+	if wg, p := self.prefetches[key]; p {
+		wg.Wait()
 		return self.GetIfPresent(key)
 	}
 	return nil, false
@@ -266,7 +266,7 @@ func (self *baseCache) Prefetch(key string, loader ValueLoader) {
 }
 
 func (self *LoadingCache) Prefetch(key string) {
-	self.Prefetch(key, self.spec.Loader)
+	self.baseCache.Prefetch(key, self.spec.Loader)
 }
 
 func (self *baseCache) Invalidate(key string) {
