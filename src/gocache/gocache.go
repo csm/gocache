@@ -124,7 +124,7 @@ type baseCache struct {
 	spec CacheSpec
 	shards []shard
 	removeShard uint
-	prefetches map[string]sync.WaitGroup
+	prefetches map[string]chan bool
 }
 
 type ManualCache struct {
@@ -139,7 +139,7 @@ type LoadingCache struct {
 func NewManualCache(spec CacheSpec) *ManualCache {
 	var result *ManualCache = new(ManualCache)
 	result.spec = spec
-	result.prefetches = map[string]sync.WaitGroup{}
+	result.prefetches = map[string]chan bool{}
 	if spec.ConcurrencyLevel < 1 {
 		spec.ConcurrencyLevel = 1
 	}
@@ -154,7 +154,7 @@ func NewManualCache(spec CacheSpec) *ManualCache {
 func NewLoadingCache(spec LoadingCacheSpec) *LoadingCache {
 	var result *LoadingCache = new(LoadingCache)
 	result.spec = spec
-	result.prefetches = map[string]sync.WaitGroup{}
+	result.prefetches = map[string]chan bool{}
 	if spec.ConcurrencyLevel < 1 {
 		spec.ConcurrencyLevel = 1
 	}
@@ -190,8 +190,9 @@ func (self *baseCache) GetIfPresent(key string) (interface{}, bool) {
 	if present {
 		return e.value, present
 	}
-	if wg, p := self.prefetches[key]; p {
-		wg.Wait()
+	if ch, p := self.prefetches[key]; p {
+		var result bool
+		result <- ch
 		return self.GetIfPresent(key)
 	}
 	return nil, false
@@ -252,15 +253,14 @@ func (self *baseCache) Put(key string, value interface{}) bool {
 func (self *baseCache) Prefetch(key string, loader ValueLoader) {
 	if loader != nil {
 		if _, p := self.prefetches[key]; !p {
-			wg := sync.WaitGroup{}
-			wg.Add(1)
-			self.prefetches[key] = wg
+			ch := make(chan bool)
+			self.prefetches[key] = ch
 			go func() {
 				value, err := loader(key)
 				if value != nil && err == nil {
 					self.Put(key, value)
-					wg.Done()
 					delete(self.prefetches, key)
+					ch <- true
 				}
 			}()
 		}
