@@ -191,8 +191,7 @@ func (self *baseCache) GetIfPresent(key string) (interface{}, bool) {
 		return e.value, present
 	}
 	if ch, p := self.prefetches[key]; p {
-		var result bool
-		result <- ch
+		<-ch
 		return self.GetIfPresent(key)
 	}
 	return nil, false
