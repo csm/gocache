@@ -124,6 +124,7 @@ type baseCache struct {
 	spec CacheSpec
 	shards []shard
 	removeShard uint
+	prefetches map[string]sync.WaitGroup
 }
 
 type ManualCache struct {
@@ -138,6 +139,7 @@ type LoadingCache struct {
 func NewManualCache(spec CacheSpec) *ManualCache {
 	var result *ManualCache = new(ManualCache)
 	result.spec = spec
+	result.prefetches = map[string]sync.WaitGroup{}
 	if spec.ConcurrencyLevel < 1 {
 		spec.ConcurrencyLevel = 1
 	}
@@ -152,6 +154,7 @@ func NewManualCache(spec CacheSpec) *ManualCache {
 func NewLoadingCache(spec LoadingCacheSpec) *LoadingCache {
 	var result *LoadingCache = new(LoadingCache)
 	result.spec = spec
+	result.prefetches = map[string]sync.WaitGroup{}
 	if spec.ConcurrencyLevel < 1 {
 		spec.ConcurrencyLevel = 1
 	}
@@ -186,6 +189,10 @@ func (self *baseCache) GetIfPresent(key string) (interface{}, bool) {
 	go self.Cleanup()
 	if present {
 		return e.value, present
+	}
+	if self.prefetches[key] != nil {
+		self.prefetches[key].Wait()
+		return self.GetIfPresent(key)
 	}
 	return nil, false
 }
@@ -237,6 +244,29 @@ func (self *baseCache) Put(key string, value interface{}) bool {
 	}
 	go self.Cleanup()
 	return updated
+}
+
+// Asynchronously load a value into this cache. If any accessor tries reading
+// that key while the prefetch is occurring, that will block on the wait
+// condition until the prefetching routine completes.
+func (self *baseCache) Prefetch(key string, loader ValueLoader) {
+	if loader != nil {
+		wg := sync.WaitGroup{}
+		wg.Add(1)
+		self.prefetches[key] = wg
+		go func() {
+			value, err := loader(key)
+			if value != nil && err == nil {
+				self.Put(key, value)
+				wg.Done()
+				delete(self.prefetches, key)
+			}
+		}()
+	}
+}
+
+func (self *LoadingCache) Prefetch(key string) {
+	self.Prefetch(key, self.spec.Loader)
 }
 
 func (self *baseCache) Invalidate(key string) {
