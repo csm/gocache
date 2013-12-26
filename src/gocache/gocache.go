@@ -119,12 +119,17 @@ type shard struct {
 	lock sync.RWMutex
 }
 
+type prefetchInfo struct {
+	key string
+}
+
 type baseCache struct {
 	Cache
 	spec CacheSpec
 	shards []shard
 	removeShard uint
-	prefetches map[string]chan bool
+	currentPrefetch *prefetchInfo
+	prefetchCond *sync.Cond
 }
 
 type ManualCache struct {
@@ -139,7 +144,8 @@ type LoadingCache struct {
 func NewManualCache(spec CacheSpec) *ManualCache {
 	var result *ManualCache = new(ManualCache)
 	result.spec = spec
-	result.prefetches = map[string]chan bool{}
+	result.currentPrefetch = nil
+	result.prefetchCond = sync.NewCond(&sync.Mutex{})
 	if spec.ConcurrencyLevel < 1 {
 		spec.ConcurrencyLevel = 1
 	}
@@ -154,7 +160,8 @@ func NewManualCache(spec CacheSpec) *ManualCache {
 func NewLoadingCache(spec LoadingCacheSpec) *LoadingCache {
 	var result *LoadingCache = new(LoadingCache)
 	result.spec = spec
-	result.prefetches = map[string]chan bool{}
+	result.currentPrefetch = nil
+	result.prefetchCond = sync.NewCond(&sync.Mutex{})
 	if spec.ConcurrencyLevel < 1 {
 		spec.ConcurrencyLevel = 1
 	}
@@ -179,20 +186,29 @@ func (self *baseCache) getShard(key string) shard {
 }
 
 func (self *baseCache) GetIfPresent(key string) (interface{}, bool) {
+	self.prefetchCond.L.Lock()
+	if self.currentPrefetch != nil && self.currentPrefetch.key == key {
+		self.prefetchCond.Wait()
+	}
+	self.prefetchCond.L.Unlock()
 	s := self.getShard(key)
 	s.lock.RLock()
 	e, present := s.values[key]
 	if present {
-		e.getTime = time.Now()
+		if self.spec.ExpireAfterWrite > 0 && e.putTime.Add(self.spec.ExpireAfterWrite).Before(time.Now()) {
+			s.lock.Lock()
+			e = nil
+			present = false
+			delete(s.values, key)
+			s.lock.Unlock()
+		} else {
+			e.getTime = time.Now()
+		}
 	}
 	s.lock.RUnlock()
 	go self.Cleanup()
 	if present {
 		return e.value, present
-	}
-	if ch, p := self.prefetches[key]; p {
-		<-ch
-		return self.GetIfPresent(key)
 	}
 	return nil, false
 }
@@ -249,19 +265,23 @@ func (self *baseCache) Put(key string, value interface{}) bool {
 // Asynchronously load a value into this cache. If any accessor tries reading
 // that key while the prefetch is occurring, that will block on the wait
 // condition until the prefetching routine completes.
+// Only one prefetch is allowed at a time.
 func (self *baseCache) Prefetch(key string, loader ValueLoader) {
 	if loader != nil {
-		if _, p := self.prefetches[key]; !p {
-			ch := make(chan bool)
-			self.prefetches[key] = ch
+		self.prefetchCond.L.Lock()
+		if self.currentPrefetch == nil {
+			self.currentPrefetch = &prefetchInfo{key: key}
+			self.prefetchCond.L.Unlock()
 			go func() {
 				value, err := loader(key)
 				if value != nil && err == nil {
 					self.Put(key, value)
-					delete(self.prefetches, key)
-					ch <- true
+					self.currentPrefetch = nil
 				}
+				self.prefetchCond.Broadcast()
 			}()
+		} else {
+			self.prefetchCond.L.Unlock()
 		}
 	}
 }
@@ -296,8 +316,12 @@ func (self *baseCache) Cleanup() {
 			self.removeShard = (self.removeShard + 1) % uint(len(self.shards))
 			shard.lock.RLock()
 			for k, v := range shard.values {
-				if v.getTime.Before(oldest) {
-					oldest = v.getTime
+				if (!v.getTime.IsZero() && v.getTime.Before(oldest)) || v.putTime.Before(oldest) {
+					if !v.getTime.IsZero() {
+						oldest = v.getTime
+					} else {
+						oldest = v.putTime
+					}
 					key = k
 					value = v.value
 				}
