@@ -3,3 +3,25 @@ Cache implementation in Go.
 Meant to be similar to cache implementations in the Guava package for Java.
 It will implement concurrent, manual and loading caches, with expire times,
 maximum sizes, concurrency levels.
+
+Example:
+
+```go
+func loadValue(key string) (interface{}, error) {
+    value, err := SomeExpensiveLoadOperation(key)
+    return value, err
+}
+
+spec := gocache.CacheSpec{MaxSize: 100, ExpireAfterWrite: 5 * time.Minute}
+cache := gocache.NewManualCache(spec)
+if val, present := cache.GetIfPresent("foo"); present {
+    fmt.Printf("got the foo: %v\n", val)
+}
+val, present, err := cache.Get("bar", loadValue)
+if err != nil {
+    fmt.Printf("loaded the bar: %v\n", val)
+}
+cache.Invalidate("bar")
+```
+
+And so on.
